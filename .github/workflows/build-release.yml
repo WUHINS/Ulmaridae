@@ -74,20 +74,23 @@ jobs:
                     echo "$KEYSTORE_FILE" | base64 -d > keystore.jks
                     ./gradlew assembleRelease --stacktrace
                   else
-                    echo "No keystore configured, skipping signed release build"
+                    echo "No keystore configured, building debug APKs instead..."
+                    ./gradlew assembleDebug --stacktrace
                   fi
 
-            - name: List generated APKs
+            - name: Find and List generated APKs
               run: |
-                  echo "Release APKs:"
-                  ls -la app/build/outputs/apk/release/
-
-            - name: Upload release APKs
-              if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+                  echo "Looking for APKs..."
+                  find app/build/outputs -name "*.apk" -type f | xargs ls -la
+                  echo "All APK directories:"
+                  find app/build/outputs -type d -name "*apk*" | xargs ls -la
+                  
+            - name: Upload APK artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: release-apks
-                  path: app/build/outputs/apk/release/*.apk
+                  name: apk-files
+                  path: app/build/outputs/apk/**/*.apk
+                  retention-days: 7
 
     release:
         needs: [build-release]
@@ -98,11 +101,11 @@ jobs:
             - name: Checkout code
               uses: actions/checkout@v4
 
-            - name: Download release APKs
+            - name: Download APK artifacts
               uses: actions/download-artifact@v4
               with:
-                  name: release-apks
-                  path: ./artifacts/
+                  name: apk-files
+                  path: ./apk-artifacts/
 
             - name: Get version from tag
               id: version
@@ -111,15 +114,35 @@ jobs:
             - name: Prepare release files
               run: |
                   mkdir -p release-files
-
-                  # Copy APKs
-                  find artifacts -name "*.apk" -exec cp {} release-files \;
-
-                  # List files for verification
-                  echo "Downloaded artifacts:"
-                  ls -la artifacts/
-                  echo "Release files:"
+                  
+                  # Copy all APKs to release-files directory
+                  find apk-artifacts -name "*.apk" -exec cp {} release-files \;
+                  
+                  # Count APKs
+                  echo "Found APKs:"
                   ls -la release-files/
+                  
+                  # Create a simple README
+                  cat > release-files/README.md << 'EOF'
+                  # APK Files
+                  
+                  This release contains the following APK variants:
+                  
+                  ## Universal APK
+                  - Contains all architectures in one file
+                  - Recommended for most users
+                  
+                  ## Architecture-specific APKs
+                  - arm64-v8a: For modern ARM64 devices
+                  - armeabi-v7a: For older ARM devices
+                  - x86_64: For 64-bit x86 devices
+                  - x86: For 32-bit x86 devices
+                  
+                  ## Installation
+                  1. Download the appropriate APK
+                  2. Enable "Install from unknown sources" in Android settings
+                  3. Install the APK
+                  EOF
 
             - name: Generate release notes
               id: release_notes
@@ -133,7 +156,7 @@ jobs:
                   5. Toggle the \"Enable Agent\" switch to start monitoring
 
                   ### APK Variants
-                  - universal - Contains all architectures, suitable for most devices
+                  - Universal - Contains all architectures, suitable for most devices
                   - arm64-v8a - Recommended for modern devices
                   - armeabi-v7a - For older devices  
                   - x86_64 - For 64-bit x86 devices
@@ -146,6 +169,7 @@ jobs:
                   echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
                   echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
                   echo "EOF" >> $GITHUB_OUTPUT
+
             - name: Create GitHub Release
               uses: softprops/action-gh-release@v2
               with:
