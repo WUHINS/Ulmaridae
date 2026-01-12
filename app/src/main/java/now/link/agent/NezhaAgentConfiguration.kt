@@ -27,7 +27,7 @@ data class NezhaAgentConfiguration(
             appendLine("disable_command_execute: ${!enableCommandExecute}")
             appendLine("disable_force_update: true")
             appendLine("disable_nat: false")
-            appendLine("disable_send_query: false")
+            appendLine("disable_send_query: true")
             appendLine("gpu: false")
             appendLine("insecure_tls: false")
             appendLine("ip_report_period: 1800")
