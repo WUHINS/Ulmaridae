@@ -429,10 +429,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _uiState.update { it.copy(isCheckingAdb = true) }
             try {
-                val results = ShizukuManager.grantAllPermissions(context.packageName)
                 val newStatus = _uiState.value.adbPermissionStatus.toMutableMap()
-                for ((perm, granted) in results) {
-                    if (granted) newStatus[perm] = true
+                for (perm in AdbUtils.ALL_PERMISSIONS) {
+                    val result = RootUtils.executeCommand("pm grant ${context.packageName} ${perm.permissionString}")
+                    newStatus[perm.permissionString] = result.first
                 }
                 val grantedCount = newStatus.count { it.value }
                 val totalCount = newStatus.size
@@ -440,7 +440,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         adbPermissionStatus = newStatus,
                         isCheckingAdb = false,
-                        toastMessage = "Shizuku: $grantedCount/$totalCount granted",
+                        toastMessage = "Grant: $grantedCount/$totalCount",
                     )
                 }
             } catch (e: Exception) {
@@ -448,7 +448,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isCheckingAdb = false,
-                        errorMessage = "Failed to grant permissions via Shizuku",
+                        errorMessage = "Failed to grant permissions",
                     )
                 }
             }

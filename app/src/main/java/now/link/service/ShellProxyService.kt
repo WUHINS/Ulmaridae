@@ -12,8 +12,6 @@ import now.link.R
 import now.link.utils.Constants
 import now.link.utils.LogManager
 import now.link.utils.RootUtils
-import now.link.utils.ShizukuManager
-import now.link.utils.ShizukuState
 import java.io.*
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -134,16 +132,7 @@ class ShellProxyService : Service() {
 
     private suspend fun executeCommand(command: String): ShellResult = withContext(Dispatchers.IO) {
         try {
-            if (ShizukuManager.state.value == ShizukuState.PERMISSION_GRANTED) {
-                val (success, output) = ShizukuManager.runCommand(command)
-                if (success) {
-                    return@withContext ShellResult(output, "", 0)
-                }
-                return@withContext ShellResult("", output, 1)
-            }
-
             val hasRoot = RootUtils.isRootAvailable()
-            val processBuilder = if (hasRoot) {
                 ProcessBuilder("su", "-c", command)
             } else {
                 ProcessBuilder("sh", "-c", command)

@@ -19,8 +19,6 @@ import now.link.utils.SPUtils
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import now.link.utils.KeepAliveManager
-import now.link.utils.ShizukuManager
-import now.link.utils.ShizukuState
 
 class UnifiedAgentService : Service() {
 

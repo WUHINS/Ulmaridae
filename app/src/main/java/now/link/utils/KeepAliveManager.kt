@@ -3,7 +3,6 @@ package now.link.utils
 import android.content.Context
 import android.os.PowerManager
 import kotlinx.coroutines.*
-import rikka.shizuku.Shizuku
 
 enum class KeepAliveLevel {
     STANDARD,
@@ -55,11 +54,6 @@ object KeepAliveManager {
     // ── Level 2: Shizuku (shell UID) ──
 
     suspend fun optimizeShizuku(context: Context): KeepAliveStatus = withContext(Dispatchers.IO) {
-        if (ShizukuManager.state.value != ShizukuState.PERMISSION_GRANTED) {
-            LogManager.w(TAG, "Shizuku not granted, skipping shizuku optimizations")
-            return@withContext currentStatus
-        }
-
         val pkg = context.packageName
         val cmds = listOf(
             "cmd appops set $pkg RUN_ANY_IN_BACKGROUND_STANDBY allow",
@@ -70,14 +64,14 @@ object KeepAliveManager {
 
         val succeeded = mutableListOf<Boolean>()
         for (cmd in cmds) {
-            val (ok, _) = execShizuku(cmd)
+            val (ok, _) = execShell(cmd)
             succeeded.add(ok)
         }
 
         currentStatus = currentStatus.copy(
-            appliedLevel = KeepAliveLevel.SHIZUKU,
-            isBackgroundRestricted = false,
-            isAppStandbyWhitelisted = true,
+            appliedLevel = if (succeeded.any { it }) KeepAliveLevel.SHIZUKU else currentStatus.appliedLevel,
+            isBackgroundRestricted = succeeded.getOrElse(0) { false },
+            isAppStandbyWhitelisted = succeeded.getOrElse(3) { false },
         )
 
         LogManager.i(TAG, "Shizuku keep-alive: background ops=${!currentStatus.isBackgroundRestricted}")
@@ -122,14 +116,9 @@ object KeepAliveManager {
         return currentStatus
     }
 
-    // ── Watchdog (periodic service health check via Shizuku) ──
+    // ── Watchdog (periodic service health check) ──
 
     fun startWatchdog(context: Context, scope: CoroutineScope) {
-        if (ShizukuManager.state.value != ShizukuState.PERMISSION_GRANTED) {
-            LogManager.d(TAG, "Shizuku not available, watchdog skipped")
-            return
-        }
-
         stopWatchdog()
         watchdogJob = scope.launch {
             val pkg = context.packageName
@@ -137,18 +126,15 @@ object KeepAliveManager {
             LogManager.i(TAG, "Watchdog started")
 
             while (isActive) {
-                delay(30_000L) // check every 30s
+                delay(30_000L)
 
                 try {
-                    val checkCmd = "pidof $pkg 2>/dev/null || pgrep -f $pkg 2>/dev/null || echo DEAD"
-                    val (ok, output) = execShizuku(checkCmd)
+                    val (ok, output) = execShell("pidof $pkg 2>/dev/null || pgrep -f $pkg 2>/dev/null || echo DEAD")
                     val alive = ok && !output.contains("DEAD")
 
                     if (!alive) {
-                        LogManager.w(TAG, "Process dead, restarting service via Shizuku")
-                        execShizuku(
-                            "am start-foreground-service --user 0 $pkg/$serviceClass"
-                        )
+                        LogManager.w(TAG, "Process dead, restarting service")
+                        execShell("am start-foreground-service --user 0 $pkg/$serviceClass")
                     }
                 } catch (e: Exception) {
                     LogManager.w(TAG, "Watchdog check failed: ${e.message}")
@@ -175,19 +161,6 @@ object KeepAliveManager {
             val output = process.inputStream.bufferedReader().readText()
             val exit = process.waitFor()
             Pair(exit == 0, output)
-        } catch (e: Exception) {
-            Pair(false, e.message ?: "")
-        }
-    }
-
-    private suspend fun execShizuku(cmd: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        try {
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", cmd), null, null)
-            val output = process.inputStream.bufferedReader().readText()
-            val error = process.errorStream.bufferedReader().readText()
-            val exit = process.waitFor()
-            val text = if (output.isNotEmpty()) output else error
-            Pair(exit == 0, text)
         } catch (e: Exception) {
             Pair(false, e.message ?: "")
         }
