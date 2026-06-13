@@ -132,7 +132,7 @@ class ShellProxyService : Service() {
 
     private suspend fun executeCommand(command: String): ShellResult = withContext(Dispatchers.IO) {
         try {
-            val hasRoot = RootUtils.isRootAvailable()
+            val processBuilder = if (RootUtils.isRootAvailable()) {
                 ProcessBuilder("su", "-c", command)
             } else {
                 ProcessBuilder("sh", "-c", command)
