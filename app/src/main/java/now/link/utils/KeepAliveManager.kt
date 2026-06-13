@@ -3,7 +3,7 @@ package now.link.utils
 import android.content.Context
 import android.os.PowerManager
 import kotlinx.coroutines.*
-import moe.shizuku.api.Shizuku
+import rikka.shizuku.Shizuku
 
 enum class KeepAliveLevel {
     STANDARD,

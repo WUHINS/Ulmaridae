@@ -50,8 +50,8 @@ accompanist-permissions = { group = "com.google.accompanist", name = "accompanis
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinSerialization" }
 
 # Shizuku
-shizuku-api = { group = "moe.shizuku.api", name = "api", version.ref = "shizuku" }
-shizuku-provider = { group = "moe.shizuku.api", name = "provider", version.ref = "shizuku" }
+shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
