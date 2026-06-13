@@ -8,11 +8,11 @@ plugins {
 import java.util.Properties
 
 android {
-    namespace = "now.link"
+    namespace = "now.link.ulmaridae.hins"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "now.link.ulmaridae"
+        applicationId = "now.link.ulmaridae.hins"
         minSdk = 24
         targetSdk = 36
         versionCode = 800

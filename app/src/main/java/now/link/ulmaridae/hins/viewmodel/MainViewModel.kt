@@ -1,0 +1,676 @@
+package now.link.ulmaridae.hins.viewmodel
+
+import android.annotation.SuppressLint
+import android.app.Application
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.asLiveData
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import now.link.ulmaridae.hins.agent.AgentConfiguration
+import now.link.ulmaridae.hins.agent.AgentType
+import now.link.ulmaridae.hins.agent.UnifiedConfigurationManager
+import now.link.ulmaridae.hins.service.UnifiedAgentService
+import now.link.ulmaridae.hins.utils.AdbUtils
+import now.link.ulmaridae.hins.utils.KeepAliveManager
+import now.link.ulmaridae.hins.utils.KeepAliveLevel
+import now.link.ulmaridae.hins.utils.KeepAliveStatus
+import now.link.ulmaridae.hins.utils.ShizukuManager
+import now.link.ulmaridae.hins.utils.ShizukuState
+import now.link.ulmaridae.hins.utils.UnifiedAgentManager
+import now.link.ulmaridae.hins.utils.Constants
+import now.link.ulmaridae.hins.utils.LogManager
+import now.link.ulmaridae.hins.utils.RootUtils
+import now.link.ulmaridae.hins.utils.ServiceStatusManager
+import now.link.ulmaridae.hins.utils.SPUtils
+import now.link.ulmaridae.hins.utils.AutoStartManager
+import now.link.ulmaridae.hins.update.UpdateInfo
+import now.link.ulmaridae.hins.update.UpdateManager
+import androidx.core.net.toUri
+
+private const val TAG = "MainViewModel"
+
+// Sealed classes for specific state types
+sealed class ServiceAction {
+    object Idle : ServiceAction()
+    object Starting : ServiceAction()
+    object Stopping : ServiceAction()
+}
+
+sealed class PermissionState {
+    object Unknown : PermissionState()
+    object Granted : PermissionState()
+    object Denied : PermissionState()
+    object ShowDialog : PermissionState()
+}
+
+sealed class BatteryOptimizationState {
+    object Unknown : BatteryOptimizationState()
+    object Exempted : BatteryOptimizationState()
+    object NotExempted : BatteryOptimizationState()
+    object ShowDialog : BatteryOptimizationState()
+}
+
+// Data class for the overall UI state
+data class MainScreenUiState(
+    val isServiceRunning: Boolean = false,
+    val isRootAvailable: Boolean = false,
+    val deviceArchitecture: String = "",
+    val agentConfiguration: AgentConfiguration? = null,
+    val currentAgentType: AgentType = AgentType.NEZHA_AGENT,
+    val availableAgentTypes: List<AgentType> = emptyList(),
+    val installedAgentTypes: List<AgentType> = emptyList(),
+    val isWakeLockEnabled: Boolean = false,
+    val isLoggingEnabled: Boolean = false,
+    val isAutoStartEnabled: Boolean = false,
+
+    // Action states using sealed classes
+    val serviceAction: ServiceAction = ServiceAction.Idle,
+    val permissionState: PermissionState = PermissionState.Unknown,
+    val batteryOptimizationState: BatteryOptimizationState = BatteryOptimizationState.Unknown,
+
+    // Dialog states
+    val showConfigurationDialog: Boolean = false,
+    val showWakeLockDialog: Boolean = false,
+    val showAgentSelectionDialog: Boolean = false,
+
+    // ADB Authorization states
+    val adbPermissionStatus: Map<String, Boolean> = emptyMap(),
+    val isCheckingAdb: Boolean = false,
+    val showAdbCommands: Boolean = false,
+    val shizukuState: ShizukuState = ShizukuState.UNAVAILABLE,
+
+    // Keep-alive states
+    val keepAliveStatus: KeepAliveStatus = KeepAliveStatus(),
+    val isOptimizingKeepAlive: Boolean = false,
+
+    // Update-related states
+    val updateInfo: UpdateInfo? = null,
+    val showUpdateDialog: Boolean = false,
+    val isCheckingUpdate: Boolean = false,
+
+    // Error handling
+    val errorMessage: String? = null,
+    val toastMessage: String? = null,
+)
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val configManager = UnifiedConfigurationManager(application)
+    private val agentManager = UnifiedAgentManager(application)
+    private val updateManager = UpdateManager(application)
+
+    // Modern StateFlow approach instead of LiveData
+    private val _uiState = MutableStateFlow(MainScreenUiState())
+    val uiState: StateFlow<MainScreenUiState> = _uiState.asStateFlow()
+
+    // Keep LiveData for service status since it comes from ServiceStatusManager
+    val isServiceRunning: LiveData<Boolean> = ServiceStatusManager
+        .observeServiceStatus(application)
+        .asLiveData(viewModelScope.coroutineContext)
+
+    init {
+        AutoStartManager.initialize()
+        ShizukuManager.initialize()
+        loadInitialState()
+        observeServiceStatus()
+        observeShizukuState()
+        checkFirstLaunch()
+        checkForUpdatesOnLaunch()
+    }
+
+    private fun loadInitialState() {
+        viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    agentConfiguration = configManager.loadConfiguration(),
+                    currentAgentType = configManager.getCurrentAgentType(),
+                    availableAgentTypes = agentManager.getAvailableAgentTypes(),
+                    installedAgentTypes = agentManager.findInstalledAgents(),
+                    isWakeLockEnabled = SPUtils.getBoolean(Constants.Preferences.WAKE_LOCK_ENABLED),
+                    isLoggingEnabled = LogManager.isLogEnabled(),
+                    isAutoStartEnabled = AutoStartManager.isAutoStartEnabled,
+                    deviceArchitecture = agentManager.getDeviceArchitecture(),
+                    isRootAvailable = RootUtils.isRootAvailable()
+                )
+            }
+        }
+    }
+
+    private fun observeServiceStatus() {
+        isServiceRunning.observeForever { isRunning ->
+            _uiState.update { it.copy(isServiceRunning = isRunning) }
+        }
+    }
+
+    private fun observeShizukuState() {
+        viewModelScope.launch {
+            ShizukuManager.state.collect { state ->
+                _uiState.update { it.copy(shizukuState = state) }
+            }
+        }
+    }
+
+    // Service control methods
+    fun startService(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(serviceAction = ServiceAction.Starting) }
+
+            try {
+                // Check configuration first
+                val config = _uiState.value.agentConfiguration
+                if (config?.server.isNullOrEmpty() || config.secret.isEmpty()) {
+                    _uiState.update { 
+                        it.copy(
+                            serviceAction = ServiceAction.Idle,
+                            showConfigurationDialog = true
+                        ) 
+                    }
+                    return@launch
+                }
+
+                // Check permissions
+                if (!checkPermissions(context)) {
+                    _uiState.update { 
+                        it.copy(
+                            serviceAction = ServiceAction.Idle,
+                            permissionState = PermissionState.ShowDialog
+                        ) 
+                    }
+                    return@launch
+                }
+
+                // Check battery optimization
+                if (!isBatteryOptimizationExempted(context)) {
+                    _uiState.update { 
+                        it.copy(
+                            serviceAction = ServiceAction.Idle,
+                            batteryOptimizationState = BatteryOptimizationState.ShowDialog
+                        ) 
+                    }
+                    return@launch
+                }
+
+                // All checks passed, start service
+                startUnifiedAgentService(context)
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to start service", e)
+                _uiState.update { 
+                    it.copy(
+                        serviceAction = ServiceAction.Idle,
+                        errorMessage = "Failed to start service: ${e.message}"
+                    ) 
+                }
+            }
+        }
+    }
+
+    fun stopService(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(serviceAction = ServiceAction.Stopping) }
+            
+            try {
+                val stopIntent = Intent(context, UnifiedAgentService::class.java).apply {
+                    action = Constants.Service.ACTION_STOP
+                }
+                context.stopService(stopIntent)
+                
+                _uiState.update { it.copy(serviceAction = ServiceAction.Idle) }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to stop service", e)
+                _uiState.update { 
+                    it.copy(
+                        serviceAction = ServiceAction.Idle,
+                        errorMessage = "Failed to stop service: ${e.message}"
+                    ) 
+                }
+            }
+        }
+    }
+
+    private fun startUnifiedAgentService(context: Context) {
+        val startIntent = Intent(context, UnifiedAgentService::class.java).apply {
+            putExtra(Constants.Service.EXTRA_WAKE_LOCK_ENABLED, _uiState.value.isWakeLockEnabled)
+        }
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(startIntent)
+        } else {
+            context.startService(startIntent)
+        }
+        
+        _uiState.update { it.copy(serviceAction = ServiceAction.Idle) }
+        LogManager.d(TAG, "Unified Agent Service started")
+    }
+
+    private fun checkPermissions(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Check POST_NOTIFICATIONS permission
+            return context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == 
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        return true // No dangerous permissions required for older versions
+    }
+
+    private fun isBatteryOptimizationExempted(context: Context): Boolean {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        return powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    }
+
+    // Permission handling
+    fun onPermissionsGranted(context: Context) {
+        _uiState.update { it.copy(permissionState = PermissionState.Granted) }
+        // Continue with service start flow
+        startService(context)
+    }
+
+    fun onPermissionsDenied(context: Context) {
+        _uiState.update { it.copy(permissionState = PermissionState.Denied) }
+        // Continue anyway but check battery optimization
+        if (!isBatteryOptimizationExempted(context)) {
+            _uiState.update { it.copy(batteryOptimizationState = BatteryOptimizationState.ShowDialog) }
+        } else {
+            startUnifiedAgentService(context)
+        }
+    }
+
+    fun dismissPermissionDialog() {
+        _uiState.update { it.copy(permissionState = PermissionState.Unknown) }
+    }
+
+    // Battery optimization handling
+    fun onBatteryOptimizationExempted(context: Context) {
+        _uiState.update { it.copy(batteryOptimizationState = BatteryOptimizationState.Exempted) }
+        startUnifiedAgentService(context)
+    }
+
+    fun onBatteryOptimizationDenied(context: Context) {
+        _uiState.update { 
+            it.copy(
+                batteryOptimizationState = BatteryOptimizationState.NotExempted,
+                toastMessage = "Battery optimization not disabled. The service may be killed by the system to save power."
+            ) 
+        }
+        startUnifiedAgentService(context)
+    }
+
+    fun dismissBatteryOptimizationDialog() {
+        _uiState.update { it.copy(batteryOptimizationState = BatteryOptimizationState.Unknown) }
+    }
+
+    @SuppressLint("BatteryLife")
+    fun requestBatteryOptimizationExemption(context: Context): Intent? {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        
+        return if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = "${Constants.Intent.PACKAGE_URI_PREFIX}${context.packageName}".toUri()
+            }
+        } else {
+            LogManager.d(TAG, "Already exempted from battery optimization")
+            null
+        }
+    }
+
+    // Configuration handling
+    fun showConfigurationDialog() {
+        _uiState.update { it.copy(showConfigurationDialog = true) }
+    }
+
+    fun dismissConfigurationDialog() {
+        _uiState.update { it.copy(showConfigurationDialog = false) }
+    }
+
+    fun updateConfiguration(agentType: AgentType, config: AgentConfiguration) {
+        // Update agent type if changed
+        if (agentType != configManager.getCurrentAgentType()) {
+            configManager.setCurrentAgentType(agentType)
+        }
+        
+        configManager.saveConfiguration(config)
+        _uiState.update { 
+            it.copy(
+                agentConfiguration = config,
+                currentAgentType = agentType,
+                showConfigurationDialog = false,
+                toastMessage = "Configuration saved"
+            ) 
+        }
+    }
+
+    fun changeAgentType(agentType: AgentType) {
+        configManager.setCurrentAgentType(agentType)
+        _uiState.update { 
+            it.copy(
+                currentAgentType = agentType,
+                agentConfiguration = configManager.loadConfiguration()
+            ) 
+        }
+    }
+
+    // Settings handling
+    fun updateWakeLockEnabled(enabled: Boolean) {
+        SPUtils.setBoolean(Constants.Preferences.WAKE_LOCK_ENABLED, enabled)
+        _uiState.update { 
+            it.copy(
+                isWakeLockEnabled = enabled,
+                showWakeLockDialog = if (enabled) true else it.showWakeLockDialog
+            ) 
+        }
+        LogManager.d(TAG, "Wake lock preference saved: $enabled")
+    }
+
+    fun updateLoggingEnabled(enabled: Boolean) {
+        LogManager.setLogEnabled(enabled)
+        _uiState.update { it.copy(isLoggingEnabled = enabled) }
+        LogManager.i(TAG, "Logging preference changed: $enabled")
+    }
+
+    fun updateAutoStartEnabled(enabled: Boolean) {
+        AutoStartManager.setAutoStartEnabled(enabled)
+        _uiState.update { it.copy(isAutoStartEnabled = enabled) }
+        LogManager.i(TAG, "Auto-start preference changed: $enabled")
+    }
+
+    fun showWakeLockDialog() {
+        _uiState.update { it.copy(showWakeLockDialog = true) }
+    }
+
+    fun dismissWakeLockDialog() {
+        _uiState.update { it.copy(showWakeLockDialog = false) }
+    }
+
+    // ADB Authorization methods
+    fun checkAdbPermissions(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingAdb = true) }
+            try {
+                val status = AdbUtils.checkAllStatus(context.packageName)
+                _uiState.update {
+                    it.copy(
+                        adbPermissionStatus = status,
+                        isCheckingAdb = false,
+                    )
+                }
+                val grantedCount = status.count { it.value }
+                val totalCount = status.size
+                LogManager.i(TAG, "ADB permissions: $grantedCount/$totalCount granted")
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to check ADB permissions", e)
+                _uiState.update {
+                    it.copy(isCheckingAdb = false, errorMessage = "Failed to check ADB permissions")
+                }
+            }
+        }
+    }
+
+    fun getAdbCommandText(context: Context): String {
+        return AdbUtils.generateAdbCommandText(context.packageName)
+    }
+
+    fun toggleAdbCommands() {
+        _uiState.update { it.copy(showAdbCommands = !it.showAdbCommands) }
+    }
+
+    fun requestShizukuPermission() {
+        ShizukuManager.requestPermission()
+    }
+
+    fun grantAllAdbViaShizuku(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingAdb = true) }
+            try {
+                val newStatus = _uiState.value.adbPermissionStatus.toMutableMap()
+                for (perm in AdbUtils.ALL_PERMISSIONS) {
+                    val result = RootUtils.executeCommand("pm grant ${context.packageName} ${perm.permissionString}")
+                    newStatus[perm.permissionString] = result.first
+                }
+                val grantedCount = newStatus.count { it.value }
+                val totalCount = newStatus.size
+                _uiState.update {
+                    it.copy(
+                        adbPermissionStatus = newStatus,
+                        isCheckingAdb = false,
+                        toastMessage = "Grant: $grantedCount/$totalCount",
+                    )
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to grant via Shizuku", e)
+                _uiState.update {
+                    it.copy(
+                        isCheckingAdb = false,
+                        errorMessage = "Failed to grant permissions",
+                    )
+                }
+            }
+        }
+    }
+
+    fun grantAllAdbViaRoot(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingAdb = true) }
+            try {
+                val results = AdbUtils.grantAllViaRoot(context.packageName)
+                val newStatus = _uiState.value.adbPermissionStatus.toMutableMap()
+                for ((perm, granted) in results) {
+                    newStatus[perm] = granted
+                }
+                val grantedCount = newStatus.count { it.value }
+                val totalCount = newStatus.size
+                _uiState.update {
+                    it.copy(
+                        adbPermissionStatus = newStatus,
+                        isCheckingAdb = false,
+                        toastMessage = "Root grant: $grantedCount/$totalCount granted",
+                    )
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to grant via root", e)
+                _uiState.update {
+                    it.copy(
+                        isCheckingAdb = false,
+                        errorMessage = "Failed to grant permissions via root",
+                    )
+                }
+            }
+        }
+    }
+
+    // Agent selection methods
+    fun checkFirstLaunch() {
+        val isFirstLaunch = SPUtils.getBoolean(Constants.Preferences.FIRST_LAUNCH, true)
+        if (isFirstLaunch) {
+            _uiState.update { it.copy(showAgentSelectionDialog = true) }
+        }
+    }
+
+    fun selectAgent(agentType: AgentType) {
+        configManager.setCurrentAgentType(agentType)
+        SPUtils.setBoolean(Constants.Preferences.FIRST_LAUNCH, false)
+        _uiState.update { 
+            it.copy(
+                currentAgentType = agentType,
+                showAgentSelectionDialog = false,
+                agentConfiguration = configManager.loadConfiguration()
+            ) 
+        }
+        LogManager.i(TAG, "Agent type selected: $agentType")
+    }
+
+    fun switchAgent(context: Context, agentType: AgentType) {
+        // Stop the current service before switching
+        stopService(context)
+
+        configManager.setCurrentAgentType(agentType)
+        _uiState.update { 
+            it.copy(
+                currentAgentType = agentType,
+                agentConfiguration = configManager.loadConfiguration()
+            ) 
+        }
+        LogManager.i(TAG, "Agent type switched to: $agentType")
+    }
+
+    fun showAgentSelectionDialog() {
+        _uiState.update { it.copy(showAgentSelectionDialog = true) }
+    }
+
+    fun dismissAgentSelectionDialog() {
+        _uiState.update { it.copy(showAgentSelectionDialog = false) }
+    }
+
+    // Error and toast handling
+    // Keep-alive methods
+    fun optimizeKeepAlive(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isOptimizingKeepAlive = true) }
+            try {
+                val status = KeepAliveManager.optimizeAll(context)
+                _uiState.update {
+                    it.copy(
+                        keepAliveStatus = status,
+                        isOptimizingKeepAlive = false,
+                        toastMessage = "Keep-alive: ${status.appliedLevel}",
+                    )
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Keep-alive optimization failed", e)
+                _uiState.update {
+                    it.copy(
+                        isOptimizingKeepAlive = false,
+                        errorMessage = "Keep-alive optimization failed",
+                    )
+                }
+            }
+        }
+    }
+
+    fun startWatchdog(context: Context) {
+        KeepAliveManager.startWatchdog(context, viewModelScope)
+        _uiState.update {
+            it.copy(keepAliveStatus = KeepAliveManager.getStatus())
+        }
+    }
+
+    fun stopWatchdog() {
+        KeepAliveManager.stopWatchdog()
+        _uiState.update {
+            it.copy(keepAliveStatus = KeepAliveManager.getStatus())
+        }
+    }
+
+    fun clearError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    fun clearToast() {
+        _uiState.update { it.copy(toastMessage = null) }
+    }
+
+    // Update check functionality
+    private fun checkForUpdatesOnLaunch() {
+        if (!updateManager.shouldCheckForUpdates()) {
+            LogManager.d(TAG, "Skipping update check - too soon since last check")
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isCheckingUpdate = true) }
+                LogManager.d(TAG, "Checking for app updates...")
+
+                val updateInfo = updateManager.checkForUpdates()
+                if (updateInfo != null) {
+                    LogManager.i(TAG, "Update available: ${updateInfo.version}")
+                    _uiState.update { 
+                        it.copy(
+                            updateInfo = updateInfo,
+                            showUpdateDialog = true,
+                            isCheckingUpdate = false
+                        ) 
+                    }
+                } else {
+                    LogManager.d(TAG, "No updates available")
+                    _uiState.update { it.copy(isCheckingUpdate = false) }
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Error checking for updates", e)
+                _uiState.update { 
+                    it.copy(
+                        isCheckingUpdate = false,
+                        errorMessage = "Failed to check for updates"
+                    ) 
+                }
+            }
+        }
+    }
+
+    fun checkForUpdatesManually() {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isCheckingUpdate = true) }
+                LogManager.d(TAG, "Manual update check initiated")
+
+                val updateInfo = updateManager.forceCheckForUpdates()
+                if (updateInfo != null) {
+                    LogManager.i(TAG, "Update available: ${updateInfo.version}")
+                    _uiState.update { 
+                        it.copy(
+                            updateInfo = updateInfo,
+                            showUpdateDialog = true,
+                            isCheckingUpdate = false
+                        ) 
+                    }
+                } else {
+                    LogManager.d(TAG, "No updates available")
+                    _uiState.update { 
+                        it.copy(
+                            isCheckingUpdate = false,
+                            toastMessage = "You have the latest version"
+                        ) 
+                    }
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Error checking for updates", e)
+                _uiState.update { 
+                    it.copy(
+                        isCheckingUpdate = false,
+                        errorMessage = "Failed to check for updates"
+                    ) 
+                }
+            }
+        }
+    }
+
+    fun onUpdateDialogUpdate() {
+        LogManager.d(TAG, "User chose to update")
+        dismissUpdateDialog()
+    }
+
+    fun onUpdateDialogIgnore() {
+        val updateInfo = _uiState.value.updateInfo
+        if (updateInfo != null) {
+            LogManager.d(TAG, "User ignored version: ${updateInfo.version}")
+            updateManager.ignoreVersion(updateInfo.version)
+        }
+        dismissUpdateDialog()
+    }
+
+    fun dismissUpdateDialog() {
+        _uiState.update { 
+            it.copy(
+                showUpdateDialog = false,
+                updateInfo = null
+            ) 
+        }
+    }
+}
