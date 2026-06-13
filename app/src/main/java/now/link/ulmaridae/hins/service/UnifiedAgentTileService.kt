@@ -154,7 +154,7 @@ class UnifiedAgentTileService : TileService() {
         val agentType = if (::configManager.isInitialized) {
             configManager.getCurrentAgentType()
         } else {
-            now.link.agent.AgentType.NEZHA_AGENT
+            now.link.ulmaridae.hins.agent.AgentType.NEZHA_AGENT
         }
 
         when {

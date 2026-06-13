@@ -155,9 +155,9 @@ fun ConfigurationDialog(
 @Composable
 fun UnifiedConfigurationDialog(
     currentAgentType: AgentType,
-    configuration: now.link.agent.AgentConfiguration,
+    configuration: now.link.ulmaridae.hins.agent.AgentConfiguration,
     onDismiss: () -> Unit,
-    onSave: (AgentType, now.link.agent.AgentConfiguration) -> Unit,
+    onSave: (AgentType, now.link.ulmaridae.hins.agent.AgentConfiguration) -> Unit,
 ) {
     var passwordVisible by remember { mutableStateOf(false) }
 
