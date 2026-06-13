@@ -18,6 +18,7 @@ import now.link.navigation.AppNavigation
 import now.link.service.UnifiedAgentTileService
 import now.link.ui.theme.UlmaridaeTheme
 import now.link.utils.LogManager
+import now.link.utils.ShizukuManager
 import now.link.utils.ThemeManager
 
 class MainActivity : ComponentActivity() {
@@ -85,6 +86,17 @@ class MainActivity : ComponentActivity() {
         val navController = rememberNavController()
 
         AppNavigation(navController = navController)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (permissions.isNotEmpty()) {
+            ShizukuManager.handlePermissionResult(requestCode, grantResults[0])
+        }
     }
 
     companion object {

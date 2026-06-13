@@ -18,6 +18,9 @@ import now.link.utils.RootUtils
 import now.link.utils.SPUtils
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import now.link.utils.KeepAliveManager
+import now.link.utils.ShizukuManager
+import now.link.utils.ShizukuState
 
 class UnifiedAgentService : Service() {
 
@@ -61,6 +64,8 @@ class UnifiedAgentService : Service() {
                 }
 
                 broadcastServiceStatus(true)
+                applyKeepAlive()
+                startShellProxy()
                 startAgent()
             }
         }
@@ -72,7 +77,9 @@ class UnifiedAgentService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        KeepAliveManager.cleanup()
         stopAgent()
+        stopShellProxy()
         serviceScope.cancel()
         releaseWakeLock()
         LogManager.d(TAG, "Service destroyed")
@@ -159,6 +166,7 @@ class UnifiedAgentService : Service() {
 
             processBuilder.environment().apply {
                 put("SSL_CERT_DIR", "/system/etc/security/cacerts")
+                put(ShellProxyService.ENV_SHELL_PROXY, "http://127.0.0.1:${ShellProxyService.PROXY_PORT}")
             }
 
             agentProcess = processBuilder.start()
@@ -207,6 +215,35 @@ class UnifiedAgentService : Service() {
                     LogManager.d(TAG, "Agent output stream closed.")
                 }
             }
+        }
+    }
+
+    private fun applyKeepAlive() {
+        serviceScope.launch {
+            KeepAliveManager.optimizeAll(this@UnifiedAgentService)
+            KeepAliveManager.startWatchdog(this@UnifiedAgentService, serviceScope)
+        }
+    }
+
+    private fun startShellProxy() {
+        val proxyIntent = Intent(this, ShellProxyService::class.java).apply {
+            action = ShellProxyService.ACTION_START_PROXY
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(proxyIntent)
+        } else {
+            startService(proxyIntent)
+        }
+        LogManager.d(TAG, "Shell proxy service started")
+    }
+
+    private fun stopShellProxy() {
+        val proxyIntent = Intent(this, ShellProxyService::class.java).apply {
+            action = ShellProxyService.ACTION_STOP_PROXY
+        }
+        try {
+            startService(proxyIntent)
+        } catch (_: Exception) {
         }
     }
 

@@ -180,6 +180,10 @@ dependencies {
     implementation(libs.androidx.compose.navigation)
     implementation(libs.accompanist.permissions)
     implementation(libs.kotlinx.serialization.json)
+
+    // Shizuku for privilege escalation
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)

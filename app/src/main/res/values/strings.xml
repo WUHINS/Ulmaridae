@@ -155,6 +155,40 @@
     <!-- Clipboard -->
     <string name="app_logs">App Logs</string>
     
+    <!-- ADB Authorization -->
+    <string name="adb_authorization">ADB Authorization</string>
+    <string name="adb_authorization_description">Grant additional permissions via ADB for advanced monitoring features</string>
+    <string name="adb_permission_granted">Granted</string>
+    <string name="adb_permission_not_granted">Not Granted</string>
+    <string name="adb_checking">Checking...</string>
+    <string name="adb_commands_title">ADB Commands</string>
+    <string name="adb_commands_description">Run these commands from a computer with ADB connected:</string>
+    <string name="adb_commands_copied">ADB commands copied to clipboard</string>
+    <string name="adb_copy_commands">Copy ADB Commands</string>
+    <string name="adb_grant_all_root">Grant All via Root</string>
+    <string name="adb_refresh_status">Refresh Status</string>
+    <string name="adb_permissions_all_granted">All ADB permissions are granted</string>
+    <string name="adb_permissions_some_missing">Some ADB permissions are not granted</string>
+    <string name="adb_no_root">Root not available — use ADB commands from a computer</string>
+    <string name="adb_how_to_title">How to use ADB</string>
+    <string name="adb_how_to_description">1. Connect your phone to a computer via USB\n2. Enable Developer Options and USB Debugging on your phone\n3. Open a terminal/command prompt on your computer\n4. Run: adb devices (verify connection)\n5. Copy and run the commands below</string>
+    <string name="adb_shizuku_section">Shizuku</string>
+    <string name="adb_shizuku_ready">Shizuku: ready to grant</string>
+    <string name="adb_shizuku_permission_required">Shizuku: permission required</string>
+    <string name="adb_shizuku_authorize">Authorize</string>
+    <string name="keep_alive_standard">Standard foreground service</string>
+    <string name="keep_alive_adb">ADB-level protection active</string>
+    <string name="keep_alive_shizuku">Shizuku-level protection active</string>
+    <string name="keep_alive_root">Root-level protection active</string>
+    <string name="keep_alive_optimize">Optimize</string>
+    <string name="keep_alive_start_watchdog">Start Watchdog</string>
+    <string name="keep_alive_stop_watchdog">Stop Watchdog</string>
+    <string name="keep_alive_status_background">Background ops</string>
+    <string name="keep_alive_status_standby">Standby whitelist</string>
+    <string name="keep_alive_status_battery">Battery whitelist</string>
+    <string name="keep_alive_status_watchdog">Watchdog</string>
+    <string name="keep_alive_status_oom">OOM protected</string>
+
     <!-- Update Dialog -->
     <string name="update_available_title">Update Available</string>
     <string name="update_version_info">Version %s is available</string>

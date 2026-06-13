@@ -17,6 +17,7 @@ composeViewModel = "2.9.2"
 composeNavigation = "2.9.3"
 accompanist = "0.34.0"
 kotlinSerialization = "1.7.3"
+shizuku = "13.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -47,6 +48,10 @@ androidx-compose-livedata = { group = "androidx.compose.runtime", name = "runtim
 androidx-compose-navigation = { group = "androidx.navigation", name = "navigation-compose", version.ref = "composeNavigation" }
 accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanist" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinSerialization" }
+
+# Shizuku
+shizuku-api = { group = "moe.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "moe.shizuku", name = "provider", version.ref = "shizuku" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

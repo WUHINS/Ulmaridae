@@ -20,6 +20,12 @@ import now.link.agent.AgentConfiguration
 import now.link.agent.AgentType
 import now.link.agent.UnifiedConfigurationManager
 import now.link.service.UnifiedAgentService
+import now.link.utils.AdbUtils
+import now.link.utils.KeepAliveManager
+import now.link.utils.KeepAliveLevel
+import now.link.utils.KeepAliveStatus
+import now.link.utils.ShizukuManager
+import now.link.utils.ShizukuState
 import now.link.utils.UnifiedAgentManager
 import now.link.utils.Constants
 import now.link.utils.LogManager
@@ -77,6 +83,16 @@ data class MainScreenUiState(
     val showWakeLockDialog: Boolean = false,
     val showAgentSelectionDialog: Boolean = false,
 
+    // ADB Authorization states
+    val adbPermissionStatus: Map<String, Boolean> = emptyMap(),
+    val isCheckingAdb: Boolean = false,
+    val showAdbCommands: Boolean = false,
+    val shizukuState: ShizukuState = ShizukuState.UNAVAILABLE,
+
+    // Keep-alive states
+    val keepAliveStatus: KeepAliveStatus = KeepAliveStatus(),
+    val isOptimizingKeepAlive: Boolean = false,
+
     // Update-related states
     val updateInfo: UpdateInfo? = null,
     val showUpdateDialog: Boolean = false,
@@ -104,8 +120,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         AutoStartManager.initialize()
+        ShizukuManager.initialize()
         loadInitialState()
         observeServiceStatus()
+        observeShizukuState()
         checkFirstLaunch()
         checkForUpdatesOnLaunch()
     }
@@ -129,9 +147,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun observeServiceStatus() {
-        // Update UI state when service status changes
         isServiceRunning.observeForever { isRunning ->
             _uiState.update { it.copy(isServiceRunning = isRunning) }
+        }
+    }
+
+    private fun observeShizukuState() {
+        viewModelScope.launch {
+            ShizukuManager.state.collect { state ->
+                _uiState.update { it.copy(shizukuState = state) }
+            }
         }
     }
 
@@ -364,6 +389,102 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(showWakeLockDialog = false) }
     }
 
+    // ADB Authorization methods
+    fun checkAdbPermissions(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingAdb = true) }
+            try {
+                val status = AdbUtils.checkAllStatus(context.packageName)
+                _uiState.update {
+                    it.copy(
+                        adbPermissionStatus = status,
+                        isCheckingAdb = false,
+                    )
+                }
+                val grantedCount = status.count { it.value }
+                val totalCount = status.size
+                LogManager.i(TAG, "ADB permissions: $grantedCount/$totalCount granted")
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to check ADB permissions", e)
+                _uiState.update {
+                    it.copy(isCheckingAdb = false, errorMessage = "Failed to check ADB permissions")
+                }
+            }
+        }
+    }
+
+    fun getAdbCommandText(context: Context): String {
+        return AdbUtils.generateAdbCommandText(context.packageName)
+    }
+
+    fun toggleAdbCommands() {
+        _uiState.update { it.copy(showAdbCommands = !it.showAdbCommands) }
+    }
+
+    fun requestShizukuPermission() {
+        ShizukuManager.requestPermission()
+    }
+
+    fun grantAllAdbViaShizuku(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingAdb = true) }
+            try {
+                val results = ShizukuManager.grantAllPermissions(context.packageName)
+                val newStatus = _uiState.value.adbPermissionStatus.toMutableMap()
+                for ((perm, granted) in results) {
+                    if (granted) newStatus[perm] = true
+                }
+                val grantedCount = newStatus.count { it.value }
+                val totalCount = newStatus.size
+                _uiState.update {
+                    it.copy(
+                        adbPermissionStatus = newStatus,
+                        isCheckingAdb = false,
+                        toastMessage = "Shizuku: $grantedCount/$totalCount granted",
+                    )
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to grant via Shizuku", e)
+                _uiState.update {
+                    it.copy(
+                        isCheckingAdb = false,
+                        errorMessage = "Failed to grant permissions via Shizuku",
+                    )
+                }
+            }
+        }
+    }
+
+    fun grantAllAdbViaRoot(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingAdb = true) }
+            try {
+                val results = AdbUtils.grantAllViaRoot(context.packageName)
+                val newStatus = _uiState.value.adbPermissionStatus.toMutableMap()
+                for ((perm, granted) in results) {
+                    newStatus[perm] = granted
+                }
+                val grantedCount = newStatus.count { it.value }
+                val totalCount = newStatus.size
+                _uiState.update {
+                    it.copy(
+                        adbPermissionStatus = newStatus,
+                        isCheckingAdb = false,
+                        toastMessage = "Root grant: $grantedCount/$totalCount granted",
+                    )
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Failed to grant via root", e)
+                _uiState.update {
+                    it.copy(
+                        isCheckingAdb = false,
+                        errorMessage = "Failed to grant permissions via root",
+                    )
+                }
+            }
+        }
+    }
+
     // Agent selection methods
     fun checkFirstLaunch() {
         val isFirstLaunch = SPUtils.getBoolean(Constants.Preferences.FIRST_LAUNCH, true)
@@ -408,6 +529,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Error and toast handling
+    // Keep-alive methods
+    fun optimizeKeepAlive(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isOptimizingKeepAlive = true) }
+            try {
+                val status = KeepAliveManager.optimizeAll(context)
+                _uiState.update {
+                    it.copy(
+                        keepAliveStatus = status,
+                        isOptimizingKeepAlive = false,
+                        toastMessage = "Keep-alive: ${status.appliedLevel}",
+                    )
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Keep-alive optimization failed", e)
+                _uiState.update {
+                    it.copy(
+                        isOptimizingKeepAlive = false,
+                        errorMessage = "Keep-alive optimization failed",
+                    )
+                }
+            }
+        }
+    }
+
+    fun startWatchdog(context: Context) {
+        KeepAliveManager.startWatchdog(context, viewModelScope)
+        _uiState.update {
+            it.copy(keepAliveStatus = KeepAliveManager.getStatus())
+        }
+    }
+
+    fun stopWatchdog() {
+        KeepAliveManager.stopWatchdog()
+        _uiState.update {
+            it.copy(keepAliveStatus = KeepAliveManager.getStatus())
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
     }

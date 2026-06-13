@@ -1,6 +1,9 @@
 package now.link.ui.screens
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -33,8 +36,12 @@ import now.link.ui.components.AgentSelectionDialog
 import now.link.ui.components.UnifiedConfigurationDialog
 import now.link.ui.components.UpdateDialog
 import now.link.ui.components.WakeLockInfoDialog
+import now.link.utils.AdbUtils
 import now.link.utils.Constants
 import now.link.utils.LogManager
+import now.link.utils.KeepAliveLevel
+import now.link.utils.KeepAliveStatus
+import now.link.utils.ShizukuState
 import now.link.utils.ThemeManager
 import now.link.viewmodel.MainViewModel
 import now.link.viewmodel.BatteryOptimizationState
@@ -104,6 +111,37 @@ fun MainScreen(
             agentType = uiState.currentAgentType,
             deviceArchitecture = uiState.deviceArchitecture,
             serverConfiguration = uiState.agentConfiguration?.server ?: ""
+        )
+
+        // ADB Authorization Card
+        val shizukuState = uiState.shizukuState
+        AdbAuthorizationCard(
+            permissions = uiState.adbPermissionStatus,
+            isChecking = uiState.isCheckingAdb,
+            showCommands = uiState.showAdbCommands,
+            isRootAvailable = uiState.isRootAvailable,
+            shizukuState = shizukuState,
+            onCheckStatus = { viewModel.checkAdbPermissions(context) },
+            onToggleCommands = { viewModel.toggleAdbCommands() },
+            onCopyCommands = {
+                val commands = viewModel.getAdbCommandText(context)
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("ADB Commands", commands))
+                Toast.makeText(context, R.string.adb_commands_copied, Toast.LENGTH_SHORT).show()
+            },
+            onGrantAllRoot = { viewModel.grantAllAdbViaRoot(context) },
+            onRequestShizukuPermission = { viewModel.requestShizukuPermission() },
+            onGrantAllShizuku = { viewModel.grantAllAdbViaShizuku(context) },
+        )
+
+        // Keep-Alive Card
+        KeepAliveCard(
+            keepAliveStatus = uiState.keepAliveStatus,
+            isOptimizing = uiState.isOptimizingKeepAlive,
+            shizukuState = uiState.shizukuState,
+            onOptimize = { viewModel.optimizeKeepAlive(context) },
+            onStartWatchdog = { viewModel.startWatchdog(context) },
+            onStopWatchdog = { viewModel.stopWatchdog() },
         )
 
         // Service Control Card
@@ -719,6 +757,424 @@ private fun ActionsCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AdbAuthorizationCard(
+    permissions: Map<String, Boolean>,
+    isChecking: Boolean,
+    showCommands: Boolean,
+    isRootAvailable: Boolean,
+    shizukuState: ShizukuState,
+    onCheckStatus: () -> Unit,
+    onToggleCommands: () -> Unit,
+    onCopyCommands: () -> Unit,
+    onGrantAllRoot: () -> Unit,
+    onRequestShizukuPermission: () -> Unit,
+    onGrantAllShizuku: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+        ) {
+            // Header row with title and status indicator
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(id = R.string.adb_authorization),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                if (permissions.isNotEmpty()) {
+                    val allGranted = permissions.all { it.value }
+                    val icon = if (allGranted) R.drawable.ic_check_circle else R.drawable.ic_warning
+                    val tint = if (allGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    Icon(
+                        painter = painterResource(id = icon),
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = stringResource(id = R.string.adb_authorization_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Permission list
+            if (permissions.isEmpty() && !isChecking) {
+                Text(
+                    text = stringResource(id = R.string.checking),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (isChecking && permissions.isEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = stringResource(id = R.string.adb_checking),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                permissions.forEach { (permString, granted) ->
+                    val permInfo = AdbUtils.ALL_PERMISSIONS.find { it.permissionString == permString }
+                    AdbPermissionRow(
+                        name = permInfo?.name ?: permString.substringAfterLast("."),
+                        description = permInfo?.description ?: "",
+                        granted = granted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Shizuku section
+            if (shizukuState != ShizukuState.UNAVAILABLE) {
+                ShizukuSection(
+                    shizukuState = shizukuState,
+                    isChecking = isChecking,
+                    onRequestPermission = onRequestShizukuPermission,
+                    onGrantAll = onGrantAllShizuku,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            // ADB commands section
+            if (showCommands) {
+                if (isRootAvailable) {
+                    Text(
+                        text = stringResource(id = R.string.adb_no_root),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Text(
+                    text = stringResource(id = R.string.adb_commands_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = stringResource(id = R.string.adb_how_to_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // Action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onCheckStatus,
+                    enabled = !isChecking,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    if (isChecking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text(stringResource(id = R.string.adb_refresh_status))
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onToggleCommands,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        if (showCommands) stringResource(id = R.string.cancel)
+                        else stringResource(id = R.string.adb_copy_commands)
+                    )
+                }
+            }
+
+            if (showCommands) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = onCopyCommands,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(id = R.string.adb_copy_commands))
+                }
+
+                if (isRootAvailable) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onGrantAllRoot,
+                        enabled = !isChecking,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(id = R.string.adb_grant_all_root))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeepAliveCard(
+    keepAliveStatus: KeepAliveStatus,
+    isOptimizing: Boolean,
+    shizukuState: ShizukuState,
+    onOptimize: () -> Unit,
+    onStartWatchdog: () -> Unit,
+    onStopWatchdog: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+        ) {
+            Text(
+                text = "Keep-Alive",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            val levelText = when (keepAliveStatus.appliedLevel) {
+                KeepAliveLevel.ROOT -> R.string.keep_alive_root
+                KeepAliveLevel.SHIZUKU -> R.string.keep_alive_shizuku
+                KeepAliveLevel.ADB -> R.string.keep_alive_adb
+                KeepAliveLevel.STANDARD -> R.string.keep_alive_standard
+            }
+            Text(
+                text = stringResource(id = levelText),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            KeepAliveStatusRow(
+                labelId = R.string.keep_alive_status_background,
+                enabled = !keepAliveStatus.isBackgroundRestricted
+            )
+            KeepAliveStatusRow(
+                labelId = R.string.keep_alive_status_standby,
+                enabled = keepAliveStatus.isAppStandbyWhitelisted
+            )
+            KeepAliveStatusRow(
+                labelId = R.string.keep_alive_status_battery,
+                enabled = keepAliveStatus.isBatteryWhitelisted
+            )
+            KeepAliveStatusRow(
+                labelId = R.string.keep_alive_status_watchdog,
+                enabled = keepAliveStatus.watchdogRunning
+            )
+
+            if (keepAliveStatus.oomAdjusted) {
+                KeepAliveStatusRow(
+                    labelId = R.string.keep_alive_status_oom,
+                    enabled = true
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onOptimize,
+                    enabled = !isOptimizing,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    if (isOptimizing) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(stringResource(id = R.string.keep_alive_optimize))
+                    }
+                }
+
+                if (shizukuState == ShizukuState.PERMISSION_GRANTED) {
+                    if (keepAliveStatus.watchdogRunning) {
+                        OutlinedButton(
+                            onClick = onStopWatchdog,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(stringResource(id = R.string.keep_alive_stop_watchdog))
+                        }
+                    } else {
+                        Button(
+                            onClick = onStartWatchdog,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(stringResource(id = R.string.keep_alive_start_watchdog))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeepAliveStatusRow(labelId: Int, enabled: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = stringResource(id = labelId),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Icon(
+            painter = painterResource(
+                id = if (enabled) R.drawable.ic_check_circle else R.drawable.ic_warning
+            ),
+            contentDescription = null,
+            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp)
+        )
+    }
+}
+
+@Composable
+private fun ShizukuSection(
+    shizukuState: ShizukuState,
+    isChecking: Boolean,
+    onRequestPermission: () -> Unit,
+    onGrantAll: () -> Unit,
+) {
+    Column {
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(id = R.string.adb_shizuku_section),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = when (shizukuState) {
+                        ShizukuState.PERMISSION_GRANTED -> stringResource(id = R.string.adb_shizuku_ready)
+                        ShizukuState.AVAILABLE -> stringResource(id = R.string.adb_shizuku_permission_required)
+                        else -> ""
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when (shizukuState) {
+                        ShizukuState.PERMISSION_GRANTED -> MaterialTheme.colorScheme.primary
+                        ShizukuState.AVAILABLE -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+
+            when (shizukuState) {
+                ShizukuState.PERMISSION_GRANTED -> {
+                    Button(
+                        onClick = onGrantAll,
+                        enabled = !isChecking,
+                    ) {
+                        Text(stringResource(id = R.string.adb_grant_all_root))
+                    }
+                }
+                ShizukuState.AVAILABLE -> {
+                    OutlinedButton(onClick = onRequestPermission) {
+                        Text(stringResource(id = R.string.adb_shizuku_authorize))
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdbPermissionRow(
+    name: String,
+    description: String,
+    granted: Boolean,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Text(
+            text = if (granted) {
+                stringResource(id = R.string.adb_permission_granted)
+            } else {
+                stringResource(id = R.string.adb_permission_not_granted)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

@@ -49,6 +49,13 @@ object Constants {
         const val ERROR_AGENT_START_FAILED = "agent_start_failed"
     }
     
+    // ADB Authorization
+    object Adb {
+        const val LAST_CHECK_TIMESTAMP = "adb_last_check"
+        const val CACHED_STATUS_PREFIX = "adb_cached_"
+        const val AUTO_CHECK_ENABLED = "adb_auto_check"
+    }
+
     // Agent Configuration
     object Agent {
         const val VERSION = "v1.13.0"

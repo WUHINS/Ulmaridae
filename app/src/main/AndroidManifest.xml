@@ -20,11 +20,22 @@
     <!-- Root detection and execution (if available) -->
     <uses-permission android:name="android.permission.ACCESS_SUPERUSER" />
 
+    <!-- ADB-grantable permissions for advanced monitoring features -->
+    <uses-permission android:name="android.permission.DUMP" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <uses-permission android:name="android.permission.BATTERY_STATS" />
+    <uses-permission android:name="android.permission.READ_LOGS" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+
+    <!-- Shizuku API permission -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
     <!-- Auto-start permission -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".App"
+        android:usesCleartextTraffic="true"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:extractNativeLibs="true"
@@ -70,6 +81,21 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <!-- Shell Proxy Service for elevated command execution -->
+        <service
+            android:name=".service.ShellProxyService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Shizuku Provider for authorization -->
+        <provider
+            android:name="moe.shizuku.api.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false" />
 
         <!-- Boot Receiver for Auto-start -->
         <receiver
